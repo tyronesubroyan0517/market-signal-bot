@@ -18,4 +18,8 @@ command -v ffmpeg >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y 
 
 [ -d bg/node_modules/mp4-muxer ] || (cd bg && npm install --silent --no-audit --no-fund)
 
+# Caption font (Anton, SIL Open Font License) fetched on first run.
+mkdir -p fonts
+[ -s fonts/Anton-Regular.ttf ] || curl -fsSL -o fonts/Anton-Regular.ttf "https://raw.githubusercontent.com/google/fonts/main/ofl/anton/Anton-Regular.ttf"
+
 echo "Stream Clipper ready: yt-dlp $(yt-dlp --version), $(ffmpeg -version | head -1 | cut -d' ' -f1-3)"
