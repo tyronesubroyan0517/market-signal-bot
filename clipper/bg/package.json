@@ -1,0 +1,9 @@
+{
+  "name": "stream-clipper-backgrounds",
+  "private": true,
+  "description": "Renders the original animated gameplay backgrounds used by clip.py.",
+  "main": "render-bg.js",
+  "dependencies": {
+    "mp4-muxer": "5.1.3"
+  }
+}
