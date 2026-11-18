@@ -1,0 +1,13 @@
+# Netlify deploy settings (Vite single-page app)
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+# Send every route to the app so client-side pages load on refresh
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
