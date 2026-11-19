@@ -17,7 +17,8 @@ in the plugin code.
 
 ## Installing the two plugins
 
-Run these in Claude Code (they are not enabled automatically):
+Both are installed at project scope and enabled in `.claude/settings.json`, so new
+sessions in this repo load them. To reinstall by hand:
 
 ```
 /plugin marketplace add Bodila51/gtavi-claudecode
