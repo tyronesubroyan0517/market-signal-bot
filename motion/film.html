@@ -1,0 +1,301 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#000}canvas{display:block}</style>
+</head><body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script>
+// Code-drawn 9:16 motion graphics. window.renderAt(t) draws the frame at t seconds.
+// Pick the film with ?film=out|five|days
+const W = 1080, H = 1920;
+const c = document.getElementById('c'), g = c.getContext('2d');
+const FILM = new URLSearchParams(location.search).get('film') || 'out';
+const F = '"Inter Display", Inter, sans-serif';
+
+// ---------- helpers ----------
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, k) => a + (b - a) * k;
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const eOut = k => 1 - Math.pow(1 - k, 3);
+const eIn = k => k * k * k;
+const eBack = k => { const s = 1.70158; k -= 1; return k * k * ((s + 1) * k + s) + 1; };
+const eInOut = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+function rnd(i) { const x = Math.sin(i * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+
+const PINK = '#ff2e88', ORANGE = '#ff8a3d', YELLOW = '#ffd23f', CYAN = '#2ee6ff', PURPLE = '#2a0b4a', NIGHT = '#0b0420';
+
+// ---------- scenery ----------
+function sky(t, hue = 0) {
+  const gr = g.createLinearGradient(0, 0, 0, H * 0.62);
+  gr.addColorStop(0, NIGHT);
+  gr.addColorStop(0.45, '#4a0f5e');
+  gr.addColorStop(0.8, '#c2186b');
+  gr.addColorStop(1, ORANGE);
+  g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  // stars
+  for (let i = 0; i < 90; i++) {
+    const x = rnd(i) * W, y = rnd(i + 99) * H * 0.4;
+    const a = 0.3 + 0.7 * Math.abs(Math.sin(t * 2 + i));
+    g.fillStyle = `rgba(255,255,255,${a * 0.7})`;
+    g.fillRect(x, y, 3, 3);
+  }
+}
+
+function sun(t, rise = 1) {
+  const cx = W / 2, cy = lerp(H * 0.78, H * 0.5, rise), r = 330;
+  g.save();
+  g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.clip();
+  const gr = g.createLinearGradient(0, cy - r, 0, cy + r);
+  gr.addColorStop(0, YELLOW); gr.addColorStop(0.55, ORANGE); gr.addColorStop(1, PINK);
+  g.fillStyle = gr; g.fillRect(cx - r, cy - r, r * 2, r * 2);
+  // scrolling stripes cut into the lower half
+  g.fillStyle = '#7a1460';
+  for (let i = 0; i < 9; i++) {
+    const y = cy + ((i * 44 + t * 30) % 400) - 20;
+    const h = 4 + (y - cy) / 26;
+    if (y > cy) g.fillRect(cx - r, y, r * 2, Math.max(0, h));
+  }
+  g.restore();
+  // glow
+  const gl = g.createRadialGradient(cx, cy, r * 0.8, cx, cy, r * 1.9);
+  gl.addColorStop(0, 'rgba(255,90,140,0.35)'); gl.addColorStop(1, 'rgba(255,90,140,0)');
+  g.fillStyle = gl; g.fillRect(0, 0, W, H);
+}
+
+function grid(t, speed = 1) {
+  const hz = H * 0.62;
+  const gr = g.createLinearGradient(0, hz, 0, H);
+  gr.addColorStop(0, '#2a0838'); gr.addColorStop(1, '#07010f');
+  g.fillStyle = gr; g.fillRect(0, hz, W, H - hz);
+  g.strokeStyle = PINK; g.lineWidth = 3; g.shadowColor = PINK; g.shadowBlur = 18;
+  // horizontal lines rushing toward the viewer
+  for (let i = 0; i < 18; i++) {
+    const z = ((i + t * speed * 1.4) % 18) / 18;
+    const y = hz + Math.pow(z, 2.6) * (H - hz);
+    g.globalAlpha = 0.25 + 0.75 * z;
+    g.beginPath(); g.moveTo(0, y); g.lineTo(W, y); g.stroke();
+  }
+  g.globalAlpha = 1;
+  for (let i = -12; i <= 12; i++) {
+    g.beginPath(); g.moveTo(W / 2 + i * 30, hz); g.lineTo(W / 2 + i * 260, H); g.stroke();
+  }
+  g.shadowBlur = 0;
+}
+
+function palm(x, base, s, sway) {
+  g.save(); g.translate(x, base); g.scale(s, s);
+  g.fillStyle = '#0a0214'; g.strokeStyle = '#0a0214';
+  // curved trunk
+  g.lineWidth = 26; g.lineCap = 'round';
+  g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(40 + sway * 20, -260, 20 + sway * 40, -520); g.stroke();
+  g.translate(20 + sway * 40, -520);
+  for (let i = 0; i < 7; i++) {
+    const a = -Math.PI / 2 + (i - 3) * 0.48 + sway * 0.15;
+    g.save(); g.rotate(a);
+    g.beginPath(); g.moveTo(0, 0);
+    g.quadraticCurveTo(110, -40, 230, 60); g.quadraticCurveTo(110, 0, 0, 14); g.fill();
+    g.restore();
+  }
+  g.restore();
+}
+
+function palms(t, rise = 1) {
+  const sw = Math.sin(t * 1.3) * 0.5;
+  const y = H * 0.66 + (1 - rise) * 300;
+  palm(30, y + 60, 0.95, sw); palm(170, y + 20, 0.65, sw * 0.8);
+  palm(W - 40, y + 70, 1.0, -sw); palm(W - 190, y + 25, 0.6, -sw * 0.8);
+}
+
+function grain(t) {
+  g.fillStyle = 'rgba(0,0,0,0.12)';
+  for (let y = 0; y < H; y += 6) g.fillRect(0, y, W, 2);
+  const v = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,0.55)');
+  g.fillStyle = v; g.fillRect(0, 0, W, H);
+}
+
+// ---------- type ----------
+function text(str, x, y, size, opts = {}) {
+  const { color = '#fff', weight = 900, align = 'center', glow = 0, alpha = 1, stroke = 0, strokeColor = NIGHT, italic = false, track = 0 } = opts;
+  g.save(); g.globalAlpha *= alpha;
+  g.font = `${italic ? 'italic ' : ''}${weight} ${size}px ${F}`;
+  g.textAlign = align; g.textBaseline = 'middle';
+  if ('letterSpacing' in g) g.letterSpacing = `${track}px`;
+  if (stroke) { g.lineJoin = 'round'; g.lineWidth = stroke; g.strokeStyle = strokeColor; g.strokeText(str, x, y); }
+  if (glow) { g.shadowColor = color; g.shadowBlur = glow; }
+  g.fillStyle = color; g.fillText(str, x, y);
+  g.restore();
+}
+
+// chrome-gradient headline
+function chrome(str, x, y, size, alpha = 1, italic = true) {
+  g.save(); g.globalAlpha *= alpha;
+  g.font = `${italic ? 'italic ' : ''}900 ${size}px ${F}`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  const gr = g.createLinearGradient(0, y - size / 2, 0, y + size / 2);
+  gr.addColorStop(0, '#fff6fb'); gr.addColorStop(0.48, '#ffb3d6'); gr.addColorStop(0.52, PINK); gr.addColorStop(1, YELLOW);
+  g.lineJoin = 'round'; g.lineWidth = size * 0.09; g.strokeStyle = NIGHT; g.strokeText(str, x, y);
+  g.shadowColor = PINK; g.shadowBlur = 40;
+  g.fillStyle = gr; g.fillText(str, x, y);
+  g.restore();
+}
+
+// word that slams in from scale 2.2 with a shake
+function slam(str, x, y, size, t, at, opts = {}) {
+  const k = prog(t, at, at + 0.35);
+  if (k <= 0) return;
+  const s = lerp(2.2, 1, eOut(k));
+  const shake = k < 1 ? 0 : Math.max(0, 1 - (t - at - 0.35) * 5) * 12;
+  g.save();
+  g.translate(x + Math.sin(t * 90) * shake, y + Math.cos(t * 70) * shake);
+  g.scale(s, s);
+  if (opts.chrome) chrome(str, 0, 0, size, k);
+  else text(str, 0, 0, size, { ...opts, alpha: k });
+  g.restore();
+}
+
+function flash(t, at, dur = 0.25) {
+  const k = prog(t, at, at + dur);
+  if (k <= 0 || k >= 1) return;
+  g.fillStyle = `rgba(255,255,255,${(1 - k) * 0.8})`; g.fillRect(0, 0, W, H);
+}
+
+function pill(str, x, y, t, at, color = CYAN) {
+  const k = eBack(prog(t, at, at + 0.4));
+  if (k <= 0) return;
+  g.save(); g.translate(x, y); g.scale(k, k);
+  g.font = `800 46px ${F}`;
+  const w = g.measureText(str).width + 70;
+  g.fillStyle = 'rgba(11,4,32,0.85)'; g.strokeStyle = color; g.lineWidth = 4;
+  g.shadowColor = color; g.shadowBlur = 24;
+  g.beginPath(); g.roundRect(-w / 2, -42, w, 84, 42); g.fill(); g.stroke();
+  g.shadowBlur = 0;
+  text(str, 0, 2, 46, { weight: 800, color: '#fff' });
+  g.restore();
+}
+
+// ---------- film 1: GTA 6 IS OUT ----------
+function filmOut(t) {
+  const rise = eOut(prog(t, 0, 2.2));
+  sky(t); sun(t, rise); grid(t, 1 + prog(t, 9, 12) * 3); palms(t, rise);
+
+  // 0.3s: small kicker
+  text('NOV 19, 2026', W / 2, 330, 54, { weight: 800, color: CYAN, glow: 20, alpha: prog(t, 0.3, 0.8) * (1 - prog(t, 4.6, 5)), track: 14 });
+  // 1.2s: GTA 6 slam
+  const out1 = 1 - prog(t, 4.6, 5);
+  g.save(); g.globalAlpha = out1;
+  slam('GTA 6', W / 2, 560, 250, t, 1.2, { chrome: true });
+  slam('IS OUT', W / 2, 800, 200, t, 1.9, { color: '#fff', stroke: 18, glow: 30 });
+  g.restore();
+  flash(t, 1.2); flash(t, 1.9, 0.2);
+
+  // 5s: kinetic place names
+  const words = [['VICE CITY', PINK], ['LEONIDA', ORANGE], ['LUCIA', CYAN], ['& JASON', YELLOW]];
+  words.forEach(([w, col], i) => {
+    const at = 5 + i * 0.55;
+    const k = eOut(prog(t, at, at + 0.4));
+    const gone = 1 - prog(t, 8.6, 9);
+    const x = lerp(i % 2 ? W + 500 : -500, W / 2, k);
+    text(w, x, 420 + i * 175, 150, { color: col, glow: 34, stroke: 14, alpha: k * gone, italic: true });
+  });
+
+  // 9s: end card
+  const k = prog(t, 9, 9.5);
+  if (k > 0) {
+    g.fillStyle = `rgba(11,4,32,${0.55 * k})`; g.fillRect(0, 0, W, H);
+    slam('YOU READY?', W / 2, 620, 150, t, 9.1, { chrome: true });
+    pill('First stop: the beach or the strip?', W / 2, 860, t, 9.8, PINK);
+    pill('Comment below ↓', W / 2, 990, t, 10.3, CYAN);
+  }
+  grain(t);
+}
+
+// ---------- film 2: 5 THINGS TO DO FIRST ----------
+const FIVE = [
+  ['Cruise the Vice City strip', 'at sunset'],
+  ['Take a boat', 'out on the water'],
+  ['Switch to', 'the other lead'],
+  ['Find the fastest car', 'in your first hour'],
+  ['Do nothing.', 'Just watch the city'],
+];
+function filmFive(t) {
+  sky(t); sun(t, 1); grid(t, 1.6); palms(t, 1);
+  // hook 0–2.2
+  const hk = 1 - prog(t, 2, 2.3);
+  g.save(); g.globalAlpha = hk;
+  slam('5 THINGS', W / 2, 520, 190, t, 0.15, { chrome: true });
+  slam('TO DO FIRST', W / 2, 720, 130, t, 0.6, { color: '#fff', stroke: 14, glow: 26 });
+  slam('IN GTA 6', W / 2, 880, 110, t, 1.0, { color: CYAN, stroke: 12, glow: 30 });
+  g.restore();
+  flash(t, 0.15);
+
+  // cards 2.3–11.3, 1.8s each
+  FIVE.forEach(([a, b], i) => {
+    const at = 2.3 + i * 1.8, end = at + 1.8;
+    if (t < at || t > end) return;
+    const kin = eBack(prog(t, at, at + 0.35));
+    const kout = eIn(prog(t, end - 0.25, end));
+    g.save();
+    g.translate(lerp(0, -W, kout), 0);
+    // big number
+    text(String(i + 1), W / 2, 500, 420 * kin, { color: [PINK, ORANGE, CYAN, YELLOW, PINK][i], glow: 50, stroke: 22, italic: true });
+    // card
+    const cy = 900;
+    g.save(); g.translate(W / 2, cy); g.scale(kin, kin);
+    g.fillStyle = 'rgba(11,4,32,0.88)'; g.strokeStyle = PINK; g.lineWidth = 5; g.shadowColor = PINK; g.shadowBlur = 30;
+    g.beginPath(); g.roundRect(-450, -150, 900, 300, 36); g.fill(); g.stroke(); g.shadowBlur = 0;
+    text(a, 0, -45, 70, { weight: 900 });
+    text(b, 0, 55, 56, { weight: 700, color: '#ffc2dd' });
+    g.restore();
+    // progress dots
+    for (let j = 0; j < 5; j++) {
+      g.fillStyle = j <= i ? YELLOW : 'rgba(255,255,255,0.3)';
+      g.beginPath(); g.arc(W / 2 + (j - 2) * 50, 1150, 12, 0, Math.PI * 2); g.fill();
+    }
+    g.restore();
+    flash(t, at, 0.15);
+  });
+  // end 11.3
+  if (t > 11.3) {
+    slam('YOUR #1?', W / 2, 640, 170, t, 11.3, { chrome: true });
+    pill('Comment it ↓', W / 2, 880, t, 11.6, CYAN);
+  }
+  grain(t);
+}
+
+// ---------- film 3: 4,811 DAYS ----------
+function filmDays(t) {
+  const rise = eOut(prog(t, 6.5, 9));
+  sky(t); sun(t, 0.15 + rise * 0.85); grid(t, 0.6 + rise * 2); palms(t, 0.5 + rise * 0.5);
+  if (t < 6.5) { g.fillStyle = `rgba(5,0,15,${0.6 * (1 - prog(t, 5.5, 6.5))})`; g.fillRect(0, 0, W, H); }
+
+  text('SEPT 17, 2013', W / 2, 380, 60, { weight: 800, color: CYAN, glow: 18, track: 10, alpha: prog(t, 0.2, 0.7) * (1 - prog(t, 6.2, 6.6)) });
+  text('GTA V comes out.', W / 2, 470, 64, { weight: 700, alpha: prog(t, 0.6, 1.1) * (1 - prog(t, 6.2, 6.6)) });
+
+  // counter 1.4 → 5.2
+  const ck = eInOut(prog(t, 1.4, 5.2));
+  const n = Math.round(ck * 4811);
+  const ca = prog(t, 1.2, 1.6) * (1 - prog(t, 6.2, 6.6));
+  const pulse = t > 5.2 ? 1 + Math.max(0, 1 - (t - 5.2) * 4) * 0.12 : 1;
+  g.save(); g.translate(W / 2, 760); g.scale(pulse, pulse);
+  chrome(n.toLocaleString('en-US'), 0, 0, 280, ca);
+  g.restore();
+  text('DAYS OF WAITING', W / 2, 950, 80, { weight: 900, color: '#fff', stroke: 12, glow: 20, alpha: ca, track: 6 });
+  text(`${(n / 365.25).toFixed(1)} years`, W / 2, 1060, 56, { weight: 700, color: '#ffc2dd', alpha: ca });
+
+  // 6.6: payoff
+  flash(t, 6.6, 0.35);
+  if (t > 6.6) {
+    slam('IT\'S OVER.', W / 2, 520, 180, t, 6.7, { chrome: true });
+    slam('GTA 6 IS HERE', W / 2, 720, 110, t, 7.4, { color: '#fff', stroke: 14, glow: 30 });
+    pill('How long did YOU wait?', W / 2, 900, t, 9, PINK);
+    pill('Comment below ↓', W / 2, 1030, t, 9.6, CYAN);
+  }
+  grain(t);
+}
+
+const FILMS = { out: [filmOut, 12], five: [filmFive, 13], days: [filmDays, 12] };
+window.DURATION = FILMS[FILM][1];
+window.renderAt = t => { g.clearRect(0, 0, W, H); FILMS[FILM][0](t); };
+window.ready = document.fonts.load(`900 100px "Inter Display"`).then(() => document.fonts.load(`italic 900 100px "Inter Display"`)).then(() => true);
+</script>
+</body></html>
