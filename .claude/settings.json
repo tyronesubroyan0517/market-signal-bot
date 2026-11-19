@@ -1,0 +1,20 @@
+{
+  "enabledPlugins": {
+    "gtavi-claudecode@gtavi-claudecode": true,
+    "lemo-opuscar@lemolab": true
+  },
+  "extraKnownMarketplaces": {
+    "gtavi-claudecode": {
+      "source": {
+        "source": "github",
+        "repo": "Bodila51/gtavi-claudecode"
+      }
+    },
+    "lemolab": {
+      "source": {
+        "source": "github",
+        "repo": "lemomo-ai/lemo-opuscar"
+      }
+    }
+  }
+}

@@ -12,8 +12,8 @@ Full details, licences and requirements: `docs/creator-tools.md`.
 | User wants | Use |
 |---|---|
 | Clips from a stream/VOD link, done end to end here | the repo's own `clip-stream` skill (no keys) |
-| GTA 6 campaigns, trends, hooks, rule checks, multilingual clips | `gtavi-claudecode` plugin if installed; otherwise `bash tools/fetch-creator-tools.sh gtavi-claudecode` and read `vendor/gtavi-claudecode/skills/<name>/SKILL.md` |
-| A short film in one of 99 styles | `lemo-opuscar` plugin, or fetch `lemo-opuscar` and read `plugin/skills/lemo-opuscar/SKILL.md` (styles are **non-commercial**) |
+| GTA 6 campaigns, trends, hooks, rule checks, multilingual clips | `gtavi-claudecode` plugin skills (enabled in `.claude/settings.json`) |
+| A short film in one of 99 styles | `lemo-opuscar` plugin (styles are **non-commercial**) |
 | A 10-second motion-design piece from a prompt | fetch `mg-styles-15`, read its `README.md` and the matching `prompts/` file |
 | A hand-painted cartoon of the Clawd character | fetch `ClaudeAnimationBase`, read its `ANIMATION_GUIDE.md`, write a scene in `src/scenes/`, run `node render.mjs --clip` |
 | Hosted clipping + auto-publishing | `openshorts` skill (needs `OPENSHORTS_API_KEY`) |
