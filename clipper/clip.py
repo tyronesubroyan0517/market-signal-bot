@@ -119,14 +119,22 @@ def load_pcm16k(path, start=None, dur=None):
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def loud_spikes(pcm, step=0.5):
+def block_db(pcm, step=0.5):
+    """Loudness (dB) of each half-second block."""
     import numpy as np
     n = int(16000 * step)
     k = len(pcm) // n
     if k == 0:
-        return []
+        return np.zeros(0, dtype=np.float32)
     blocks = pcm[: k * n].reshape(k, n)
-    db = 10 * np.log10((blocks ** 2).mean(axis=1) + 1e-10)
+    return (10 * np.log10((blocks ** 2).mean(axis=1) + 1e-10)).astype(np.float32)
+
+
+def loud_spikes(db, step=0.5, top=40):
+    import numpy as np
+    k = len(db)
+    if k == 0:
+        return []
     valid = db[db > -90]
     med = float(np.median(valid)) if len(valid) else -40.0
     w = int(30 / step)
@@ -136,7 +144,15 @@ def loud_spikes(pcm, step=0.5):
         if db[i] >= db[lo:hi].max() and db[i] > med + 6:
             peaks.append((i * step, round(float(db[i] - med), 1)))
     peaks.sort(key=lambda p: -p[1])
-    return sorted(peaks[:40])
+    return sorted(peaks[:top])
+
+
+def media_duration(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True).stdout
+    try:
+        return float(out.strip())
+    except ValueError:
+        return 0.0
 
 
 def whisper(model_name):
@@ -145,25 +161,32 @@ def whisper(model_name):
 
 
 def cmd_transcribe(a):
+    """Works through the audio in 30-minute pieces so even multi-day streams fit in memory."""
+    import numpy as np
     job = Path(a.job)
     info = json.loads((job / "info.json").read_text())
     t0 = time.time()
-    pcm = load_pcm16k(audio_file(job))
-    total = len(pcm) / 16000
-    peaks = loud_spikes(pcm)
-    log(f"audio {fmt(total)} decoded, {len(peaks)} loud spikes ({time.time() - t0:.0f}s)")
+    audio = audio_file(job)
+    total = media_duration(audio) or float(info.get("duration") or 0)
     model = whisper(a.model)
-    segs = []
-    seg_iter, _ = model.transcribe(pcm, language="en", vad_filter=True, vad_parameters={"min_silence_duration_ms": 700}, beam_size=1, condition_on_previous_text=False, without_timestamps=False)
-    last = time.time()
-    for s in seg_iter:
-        text = s.text.strip()
-        if text:
-            segs.append({"s": round(s.start, 2), "e": round(s.end, 2), "text": text})
-        if time.time() - last > 15:
-            el = time.time() - t0
-            log(f"transcribed {fmt(s.end)} of {fmt(total)} ({s.end / max(el, 1):.1f}x real time)")
-            last = time.time()
+    piece = 1800.0
+    segs, dbs = [], []
+    pos = 0.0
+    while pos < total:
+        pcm = load_pcm16k(audio, pos, piece)
+        if len(pcm) == 0:
+            break
+        dbs.append(block_db(pcm))
+        seg_iter, _ = model.transcribe(pcm, language="en", vad_filter=True, vad_parameters={"min_silence_duration_ms": 700}, beam_size=1, condition_on_previous_text=False)
+        for s in seg_iter:
+            text = s.text.strip()
+            if text:
+                segs.append({"s": round(pos + s.start, 2), "e": round(pos + s.end, 2), "text": text})
+        pos += len(pcm) / 16000
+        el = time.time() - t0
+        log(f"transcribed {fmt(pos)} of {fmt(total)} ({pos / max(el, 1):.1f}x real time)")
+    peaks = loud_spikes(np.concatenate(dbs) if dbs else np.zeros(0), top=max(40, int(total / 900)))
+    total = pos
     (job / "transcript.json").write_text(json.dumps({"segments": segs, "peaks": peaks, "duration": total}))
     # Compact version for Claude: ~20-second lines.
     lines, cur, cur_s = [], [], None
