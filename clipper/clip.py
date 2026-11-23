@@ -119,14 +119,22 @@ def load_pcm16k(path, start=None, dur=None):
     return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
 
 
-def loud_spikes(pcm, step=0.5):
+def block_db(pcm, step=0.5):
+    """Loudness (dB) of each half-second block."""
     import numpy as np
     n = int(16000 * step)
     k = len(pcm) // n
     if k == 0:
-        return []
+        return np.zeros(0, dtype=np.float32)
     blocks = pcm[: k * n].reshape(k, n)
-    db = 10 * np.log10((blocks ** 2).mean(axis=1) + 1e-10)
+    return (10 * np.log10((blocks ** 2).mean(axis=1) + 1e-10)).astype(np.float32)
+
+
+def loud_spikes(db, step=0.5, top=40):
+    import numpy as np
+    k = len(db)
+    if k == 0:
+        return []
     valid = db[db > -90]
     med = float(np.median(valid)) if len(valid) else -40.0
     w = int(30 / step)
@@ -136,7 +144,15 @@ def loud_spikes(pcm, step=0.5):
         if db[i] >= db[lo:hi].max() and db[i] > med + 6:
             peaks.append((i * step, round(float(db[i] - med), 1)))
     peaks.sort(key=lambda p: -p[1])
-    return sorted(peaks[:40])
+    return sorted(peaks[:top])
+
+
+def media_duration(path):
+    out = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", str(path)], capture_output=True, text=True).stdout
+    try:
+        return float(out.strip())
+    except ValueError:
+        return 0.0
 
 
 def whisper(model_name):
@@ -145,25 +161,32 @@ def whisper(model_name):
 
 
 def cmd_transcribe(a):
+    """Works through the audio in 30-minute pieces so even multi-day streams fit in memory."""
+    import numpy as np
     job = Path(a.job)
     info = json.loads((job / "info.json").read_text())
     t0 = time.time()
-    pcm = load_pcm16k(audio_file(job))
-    total = len(pcm) / 16000
-    peaks = loud_spikes(pcm)
-    log(f"audio {fmt(total)} decoded, {len(peaks)} loud spikes ({time.time() - t0:.0f}s)")
+    audio = audio_file(job)
+    total = media_duration(audio) or float(info.get("duration") or 0)
     model = whisper(a.model)
-    segs = []
-    seg_iter, _ = model.transcribe(pcm, language="en", vad_filter=True, vad_parameters={"min_silence_duration_ms": 700}, beam_size=1, condition_on_previous_text=False, without_timestamps=False)
-    last = time.time()
-    for s in seg_iter:
-        text = s.text.strip()
-        if text:
-            segs.append({"s": round(s.start, 2), "e": round(s.end, 2), "text": text})
-        if time.time() - last > 15:
-            el = time.time() - t0
-            log(f"transcribed {fmt(s.end)} of {fmt(total)} ({s.end / max(el, 1):.1f}x real time)")
-            last = time.time()
+    piece = 1800.0
+    segs, dbs = [], []
+    pos = 0.0
+    while pos < total:
+        pcm = load_pcm16k(audio, pos, piece)
+        if len(pcm) == 0:
+            break
+        dbs.append(block_db(pcm))
+        seg_iter, _ = model.transcribe(pcm, language="en", vad_filter=True, vad_parameters={"min_silence_duration_ms": 700}, beam_size=1, condition_on_previous_text=False)
+        for s in seg_iter:
+            text = s.text.strip()
+            if text:
+                segs.append({"s": round(pos + s.start, 2), "e": round(pos + s.end, 2), "text": text})
+        pos += len(pcm) / 16000
+        el = time.time() - t0
+        log(f"transcribed {fmt(pos)} of {fmt(total)} ({pos / max(el, 1):.1f}x real time)")
+    peaks = loud_spikes(np.concatenate(dbs) if dbs else np.zeros(0), top=max(40, int(total / 900)))
+    total = pos
     (job / "transcript.json").write_text(json.dumps({"segments": segs, "peaks": peaks, "duration": total}))
     # Compact version for Claude: ~20-second lines.
     lines, cur, cur_s = [], [], None
@@ -252,6 +275,42 @@ def stream_urls(info):
     return [u for u in out if u.startswith("http")]
 
 
+def fetch_playlist(url):
+    """Download an HLS media playlist; returns (base_url, [(start_sec, dur, uri), ...]) or None."""
+    import urllib.request
+    try:
+        text = urllib.request.urlopen(url, timeout=60).read().decode("utf-8", "replace")
+    except Exception as e:
+        log(f"could not read playlist, falling back to direct seeking: {e}")
+        return None
+    if "#EXT-X-STREAM-INF" in text or "#EXTINF" not in text:
+        return None
+    segs, t, dur = [], 0.0, None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXTINF:"):
+            dur = float(line[8:].split(",")[0])
+        elif line and not line.startswith("#") and dur is not None:
+            segs.append((t, dur, line))
+            t += dur
+            dur = None
+    return url.rsplit("/", 1)[0] + "/", segs
+
+
+def section_playlist(pl, start, end, path):
+    """Write a small playlist covering only [start, end]; returns the offset to seek within it."""
+    base, segs = pl
+    pick = [sg for sg in segs if sg[0] + sg[1] > start - 1 and sg[0] < end + 1]
+    if not pick:
+        return None
+    lines = ["#EXTM3U", "#EXT-X-VERSION:3", f"#EXT-X-TARGETDURATION:{int(max(sg[1] for sg in pick)) + 1}", "#EXT-X-MEDIA-SEQUENCE:0"]
+    for st, d, uri in pick:
+        lines += [f"#EXTINF:{d:.3f},", uri if uri.startswith("http") else base + uri]
+    lines.append("#EXT-X-ENDLIST")
+    Path(path).write_text("\n".join(lines) + "\n")
+    return start - pick[0][0]
+
+
 def safe_name(s):
     s = re.sub(r"[^\w\- ]+", "", s).strip()
     return (s[:60] or "clip")
@@ -270,6 +329,7 @@ def cmd_render(a):
     log("loading the caption model…")
     model = whisper(a.caption_model)
     urls = stream_urls(info)
+    playlists = [fetch_playlist(u) if ".m3u8" in u else None for u in urls]
     sw, sh = info.get("src_w") or 1920, info.get("src_h") or 1080
     if sw / sh >= OW / HALF:
         scale, cw = f"scale=-2:{HALF}", round(HALF * sw / sh / 2) * 2
@@ -284,15 +344,27 @@ def cmd_render(a):
         dur = end - start
         name = f"{i + 1:02d} {safe_name(m.get('title', 'clip'))}.mp4"
         dest = out / name
+        if dest.exists() and dest.stat().st_size > 0 and not a.force:
+            made.append(dest)
+            log(f"[{i + 1}/{len(moments)}] {name} already rendered, skipping")
+            continue
         t0 = time.time()
+        tmp = dest.with_name(dest.stem + ".part.mp4")
         try:
             words = clip_words(model, audio, start, dur)
             ass = job / f"cap_{i:02d}.ass"
             build_ass(words, ass, HALF)
             bg_off = random.uniform(0, max(0.0, 100 - dur - 1))
             inputs = []
-            for u in urls:
-                inputs += [*net_args(), "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", u]
+            for k, u in enumerate(urls):
+                off = None
+                if playlists[k]:
+                    local = job / f"sec_{i:02d}_{k}.m3u8"
+                    off = section_playlist(playlists[k], start, end, local)
+                if off is not None:  # only the few HLS pieces this clip needs
+                    inputs += ["-protocol_whitelist", "file,http,https,httpproxy,tcp,tls,crypto", "-ss", f"{off:.3f}", "-t", f"{dur:.3f}", "-i", str(local)]
+                else:
+                    inputs += [*net_args(), "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", u]
             inputs += ["-ss", f"{bg_off:.2f}", "-t", f"{dur:.3f}", "-i", str(bg)]
             bgi = len(urls)
             ai = 1 if len(urls) > 1 else 0
@@ -303,7 +375,11 @@ def cmd_render(a):
                   f"[{ai}:a]aresample=48000,afade=t=in:d=0.15,afade=t=out:st={max(0, dur - 0.3):.2f}:d=0.3[a]")
             run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
                  "-c:v", "libx264", "-preset", a.preset, "-crf", "21", "-r", str(FPS), "-c:a", "aac", "-b:a", "160k",
-                 "-movflags", "+faststart", str(dest)])
+                 "-movflags", "+faststart", str(tmp)])
+            if tmp.stat().st_size < 100_000:  # ffmpeg can "succeed" with no frames when the stream input fails
+                tmp.unlink()
+                raise RuntimeError("the cut came out empty (no video frames)")
+            tmp.replace(dest)
             made.append(dest)
             log(f"[{i + 1}/{len(moments)}] {name} ({dur:.0f}s) in {time.time() - t0:.0f}s, {len(words)} caption words")
         except Exception as e:  # keep going with the other clips
@@ -333,6 +409,7 @@ def main():
     r.add_argument("--layout", choices=["top", "bottom"], default="top"); r.add_argument("--bg", choices=["runner", "marbles"], default="runner")
     r.add_argument("--pan", type=float, default=0.5); r.add_argument("--max", type=int, default=0)
     r.add_argument("--caption-model", default="small.en"); r.add_argument("--preset", default="veryfast")
+    r.add_argument("--force", action="store_true", help="re-render clips that already exist")
     a = p.parse_args()
     {"fetch": cmd_fetch, "transcribe": cmd_transcribe, "prepare": cmd_prepare, "render": cmd_render}[a.cmd](a)
 
