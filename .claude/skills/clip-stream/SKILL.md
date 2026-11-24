@@ -56,6 +56,18 @@ python3 clipper/clip.py render --job /tmp/clips/<name> --moments /tmp/clips/<nam
 
 - `--layout top|bottom`: stream on top (default) or bottom. `--bg runner|marbles`: the animated gameplay half.
   `--pan 0.0–1.0`: crop position across the stream (0.5 = centre; use ~0.15 or ~0.85 when the facecam is at the side).
+- **Campaign mode (streamer must be the focus).** Most streamer campaigns reject clips where the streamer is not the
+  primary focus, and want their name on screen. Grab a full frame (see below), find the facecam box in source pixels,
+  and render with `--cam x,y,w,h --pan 0.65 --overlay`: the cam fills one half, gameplay the other (no animated
+  background), and each moment's `"overlay"` text (falling back to `title`) sits on the gameplay half for the whole clip.
+  Put the streamer's name in every overlay, use `\\N` for a line break (about 20 characters per line).
+  Facecams move during long streams: check a frame per clip and give a moment its own `"cam"` box when it differs.
+  Drop moments where someone else fills the screen. Frame grab for a moment at second T:
+  `python3 -c` with `clip.fetch_playlist` + `clip.section_playlist(pl, T, T+2, "f.m3u8")`, then
+  `ffmpeg -protocol_whitelist file,http,https,httpproxy,tcp,tls,crypto -ss <offset> -i f.m3u8 -frames:v 1 f.png`
+  with `http_proxy=$HTTPS_PROXY` set.
+- Always read the campaign's rule sheet if the user has one, and also write a post caption per clip that meets it
+  (required name, hashtags).
 - Cuts each moment straight from the stream at up to 1080p, re-transcribes it with a more accurate model for
   word-timed captions, and renders 1080×1920 H.264/AAC MP4s into `<job>/out/`, plus `<job>/clips.zip`.
 - Roughly 30–60 seconds of rendering per clip. Run it in the background and report each finished clip.
