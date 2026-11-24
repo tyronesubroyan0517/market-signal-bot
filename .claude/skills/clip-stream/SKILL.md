@@ -62,6 +62,8 @@ python3 clipper/clip.py render --job /tmp/clips/<name> --moments /tmp/clips/<nam
   background), and each moment's `"overlay"` text (falling back to `title`) sits on the gameplay half for the whole clip.
   Put the streamer's name in every overlay, use `\\N` for a line break (about 20 characters per line).
   Facecams move during long streams: check a frame per clip and give a moment its own `"cam"` box when it differs.
+  When the streamer is full-screen on camera (just chatting, post-game talk), give that moment `"full": <x centre in
+  source px of the streamer>` instead: one tall 9:16 crop, captions low, overlay near the top.
   Drop moments where someone else fills the screen. Frame grab for a moment at second T:
   `python3 -c` with `clip.fetch_playlist` + `clip.section_playlist(pl, T, T+2, "f.m3u8")`, then
   `ffmpeg -protocol_whitelist file,http,https,httpproxy,tcp,tls,crypto -ss <offset> -i f.m3u8 -frames:v 1 f.png`
