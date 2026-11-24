@@ -218,7 +218,7 @@ def clean_word(w):
     return w.upper()
 
 
-def build_ass(words, path, cy):
+def build_ass(words, path, cy, overlay=None, overlay_y=None):
     head = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {OW}
@@ -229,11 +229,14 @@ ScaledBorderAndShadow: yes
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Cap,Anton,104,&H00FFFFFF,&H00FFFFFF,&H00000000,&H64000000,0,0,0,0,100,100,1,0,1,9,3,5,60,60,0,1
+Style: Ttl,Anton,78,&H00FFFFFF,&H00FFFFFF,&H00000000,&H00000000,0,0,0,0,100,100,1,0,3,18,0,5,70,70,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ev = []
+    if overlay:  # title card for the whole clip (e.g. naming the streamer, as campaigns require); "\\N" breaks lines
+        ev.append(f"Dialogue: 1,{ass_time(0)},{ass_time(600)},Ttl,,0,0,0,,{{\\an5\\pos({OW // 2},{overlay_y})}}" + overlay.upper())
     groups = [words[i:i + 3] for i in range(0, len(words), 3)]
     for g in groups:
         for k, w in enumerate(g):
@@ -316,6 +319,15 @@ def safe_name(s):
     return (s[:60] or "clip")
 
 
+def cam_crop(box):
+    """x,y,w,h of a facecam box in source pixels -> ffmpeg crop to the half's shape, centred on the box."""
+    if not box:
+        return None
+    cx, cy, cw, ch = (float(v) for v in str(box).split(","))
+    w2, h2 = (ch * OW / HALF, ch) if cw / ch > OW / HALF else (cw, cw * HALF / OW)
+    return f"crop={int(w2)}:{int(h2)}:{int(cx + (cw - w2) / 2)}:{int(cy + (ch - h2) / 2)}"
+
+
 def cmd_render(a):
     job = Path(a.job)
     info = json.loads((job / "info.json").read_text())
@@ -353,7 +365,8 @@ def cmd_render(a):
         try:
             words = clip_words(model, audio, start, dur)
             ass = job / f"cap_{i:02d}.ass"
-            build_ass(words, ass, HALF)
+            ovl = (m.get("overlay") or m.get("title")) if a.overlay else None
+            build_ass(words, ass, HALF, ovl, OH - 230 if a.layout == "top" else 230)
             bg_off = random.uniform(0, max(0.0, 100 - dur - 1))
             inputs = []
             for k, u in enumerate(urls):
@@ -365,12 +378,18 @@ def cmd_render(a):
                     inputs += ["-protocol_whitelist", "file,http,https,httpproxy,tcp,tls,crypto", "-ss", f"{off:.3f}", "-t", f"{dur:.3f}", "-i", str(local)]
                 else:
                     inputs += [*net_args(), "-ss", f"{start:.3f}", "-t", f"{dur:.3f}", "-i", u]
-            inputs += ["-ss", f"{bg_off:.2f}", "-t", f"{dur:.3f}", "-i", str(bg)]
-            bgi = len(urls)
             ai = 1 if len(urls) > 1 else 0
-            top, bot = ("src", "bg") if a.layout == "top" else ("bg", "src")
-            fc = (f"[0:v]{scale},{crop},setsar=1,fps={FPS}[src];"
-                  f"[{bgi}:v]scale={OW}:{HALF},setsar=1,fps={FPS}[bg];"
+            cam = cam_crop(m.get("cam") or a.cam)  # a moment's own "cam" box wins (the overlay can move mid-stream)
+            if cam:  # streamer's facecam fills the other half instead of the animated background
+                top, bot = ("cam", "src") if a.layout == "top" else ("src", "cam")
+                halves = (f"[0:v]split=2[s0][s1];[s0]{scale},{crop},setsar=1,fps={FPS}[src];"
+                          f"[s1]{cam},scale={OW}:{HALF}:flags=lanczos,setsar=1,fps={FPS}[cam];")
+            else:
+                inputs += ["-ss", f"{bg_off:.2f}", "-t", f"{dur:.3f}", "-i", str(bg)]
+                top, bot = ("src", "bg") if a.layout == "top" else ("bg", "src")
+                halves = (f"[0:v]{scale},{crop},setsar=1,fps={FPS}[src];"
+                          f"[{len(urls)}:v]scale={OW}:{HALF},setsar=1,fps={FPS}[bg];")
+            fc = (halves +
                   f"[{top}][{bot}]vstack=inputs=2,ass={ass}:fontsdir={FONTS},format=yuv420p[v];"
                   f"[{ai}:a]aresample=48000,afade=t=in:d=0.15,afade=t=out:st={max(0, dur - 0.3):.2f}:d=0.3[a]")
             run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
@@ -410,6 +429,8 @@ def main():
     r.add_argument("--pan", type=float, default=0.5); r.add_argument("--max", type=int, default=0)
     r.add_argument("--caption-model", default="small.en"); r.add_argument("--preset", default="veryfast")
     r.add_argument("--force", action="store_true", help="re-render clips that already exist")
+    r.add_argument("--cam", help="x,y,w,h of the streamer's facecam in source pixels: puts the cam on one half and gameplay on the other (no animated background)")
+    r.add_argument("--overlay", action="store_true", help="show each moment's 'overlay' text (or its title) on the gameplay half for the whole clip")
     a = p.parse_args()
     {"fetch": cmd_fetch, "transcribe": cmd_transcribe, "prepare": cmd_prepare, "render": cmd_render}[a.cmd](a)
 
