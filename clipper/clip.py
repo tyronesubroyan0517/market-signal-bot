@@ -366,7 +366,11 @@ def cmd_render(a):
             words = clip_words(model, audio, start, dur)
             ass = job / f"cap_{i:02d}.ass"
             ovl = (m.get("overlay") or m.get("title")) if a.overlay else None
-            build_ass(words, ass, HALF, ovl, OH - 230 if a.layout == "top" else 230)
+            full = m.get("full")  # x centre (source px) of a full-screen camera scene: one tall crop, no split
+            if full is not None:
+                build_ass(words, ass, int(OH * 0.72), ovl, 300)
+            else:
+                build_ass(words, ass, HALF, ovl, OH - 230 if a.layout == "top" else 230)
             bg_off = random.uniform(0, max(0.0, 100 - dur - 1))
             inputs = []
             for k, u in enumerate(urls):
@@ -389,8 +393,13 @@ def cmd_render(a):
                 top, bot = ("src", "bg") if a.layout == "top" else ("bg", "src")
                 halves = (f"[0:v]{scale},{crop},setsar=1,fps={FPS}[src];"
                           f"[{len(urls)}:v]scale={OW}:{HALF},setsar=1,fps={FPS}[bg];")
-            fc = (halves +
-                  f"[{top}][{bot}]vstack=inputs=2,ass={ass}:fontsdir={FONTS},format=yuv420p[v];"
+            if full is not None:
+                fw = round(sh * OW / OH / 2) * 2
+                fx = int(min(max(0, float(full) - fw / 2), sw - fw))
+                video = f"[0:v]crop={fw}:{sh}:{fx}:0,scale={OW}:{OH}:flags=lanczos,setsar=1,fps={FPS}"
+            else:
+                video = halves + f"[{top}][{bot}]vstack=inputs=2"
+            fc = (video + f",ass={ass}:fontsdir={FONTS},format=yuv420p[v];"
                   f"[{ai}:a]aresample=48000,afade=t=in:d=0.15,afade=t=out:st={max(0, dur - 0.3):.2f}:d=0.3[a]")
             run(["ffmpeg", "-v", "error", "-y", *inputs, "-filter_complex", fc, "-map", "[v]", "-map", "[a]",
                  "-c:v", "libx264", "-preset", a.preset, "-crf", "21", "-r", str(FPS), "-c:a", "aac", "-b:a", "160k",
